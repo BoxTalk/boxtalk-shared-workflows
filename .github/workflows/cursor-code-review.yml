@@ -1,0 +1,171 @@
+name: Reusable Code Review
+
+on:
+  workflow_call:
+    inputs:
+      prompt_path:
+        description: 'Path to the code review prompt file'
+        required: false
+        type: string
+        default: '.github/prompts/code-review-prompt.txt'
+      model_name:
+        description: 'Model name to use for code review'
+        required: false
+        type: string
+        default: 'claude-sonnet-4-5-20250929'
+      min_lines_changed:
+        description: 'Minimum lines changed to trigger review'
+        required: false
+        type: number
+        default: 10
+    secrets:
+      CURSOR_API_KEY:
+        description: 'Cursor API key for authentication'
+        required: true
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check if review needed
+        id: check_review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_ADDITIONS: ${{ github.event.pull_request.additions }}
+          PR_DELETIONS: ${{ github.event.pull_request.deletions }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MIN_LINES: ${{ inputs.min_lines_changed }}
+        run: |
+          set -e
+
+          # Skip if PR is draft
+          if [ "$PR_DRAFT" = "true" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "reason=PR is in draft status" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Skip if very small change
+          TOTAL_CHANGES=$((PR_ADDITIONS + PR_DELETIONS))
+          if [ "$TOTAL_CHANGES" -lt "$MIN_LINES" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "reason=Change is too small ($TOTAL_CHANGES lines)" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check if this exact SHA was already reviewed
+          EXISTING_REVIEW=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" \
+            --jq ".[] | select(.commit_id == \"$PR_HEAD_SHA\" and .user.login == \"github-actions[bot]\") | .id" \
+            | head -1)
+
+          if [ -n "$EXISTING_REVIEW" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "reason=Commit $PR_HEAD_SHA already reviewed (review #$EXISTING_REVIEW)" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "skip=false" >> $GITHUB_OUTPUT
+          echo "Review will proceed: $TOTAL_CHANGES lines changed"
+
+      - name: Skip notification
+        if: steps.check_review.outputs.skip == 'true'
+        run: |
+          echo "⏭️ Skipping code review: ${{ steps.check_review.outputs.reason }}"
+
+      - name: Checkout repository
+        if: steps.check_review.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install Cursor CLI
+        if: steps.check_review.outputs.skip != 'true'
+        run: |
+          set -e
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+          # Verify installation
+          if [ ! -f "$HOME/.local/bin/cursor-agent" ]; then
+            echo "Error: Cursor CLI installation failed"
+            exit 1
+          fi
+
+      - name: Validate API key
+        if: steps.check_review.outputs.skip != 'true'
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Error: CURSOR_API_KEY secret is not set"
+            exit 1
+          fi
+
+      - name: Check prompt file
+        if: steps.check_review.outputs.skip != 'true'
+        id: check_prompt
+        run: |
+          PROMPT_PATH="${{ inputs.prompt_path }}"
+          if [ ! -f "$PROMPT_PATH" ]; then
+            echo "⚠️ Warning: Prompt file not found at $PROMPT_PATH"
+            echo "Using default prompt from shared workflow repository"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Using custom prompt from $PROMPT_PATH"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout shared workflow for default prompt
+        if: steps.check_review.outputs.skip != 'true' && steps.check_prompt.outputs.exists == 'false'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/boxtalk-shared-workflows
+          path: .shared-workflows
+          sparse-checkout: |
+            .github/prompts/code-review-prompt.txt
+
+      - name: Use default prompt if custom not found
+        if: steps.check_review.outputs.skip != 'true' && steps.check_prompt.outputs.exists == 'false'
+        run: |
+          mkdir -p .github/prompts
+          cp .shared-workflows/.github/prompts/code-review-prompt.txt .github/prompts/code-review-prompt.txt
+          echo "✅ Default prompt copied successfully"
+
+      - name: Perform code review
+        if: steps.check_review.outputs.skip != 'true'
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PROMPT_PATH: ${{ inputs.prompt_path }}
+          MODEL_NAME: ${{ inputs.model_name }}
+        run: |
+          set -eo pipefail
+          # Load and prepare the prompt using jq for safe substitution
+          PROMPT=$(jq -Rs \
+            --arg repo "$REPO" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg pr_head_sha "$PR_HEAD_SHA" \
+            --arg pr_base_sha "$PR_BASE_SHA" \
+            'gsub("\\{\\{REPO\\}\\}"; $repo) | gsub("\\{\\{PR_NUMBER\\}\\}"; $pr_number) | gsub("\\{\\{PR_HEAD_SHA\\}\\}"; $pr_head_sha) | gsub("\\{\\{PR_BASE_SHA\\}\\}"; $pr_base_sha)' \
+            "$PROMPT_PATH")
+
+          # Run cursor-agent with output capture and error handling
+          echo "Starting code review with cursor-agent (model: $MODEL_NAME)..."
+          if ! OUTPUT=$(cursor-agent --force --model "$MODEL_NAME" --output-format=text --print "$PROMPT" 2>&1); then
+            echo "Error: cursor-agent failed with exit code $?"
+            echo "Output: $OUTPUT"
+            exit 1
+          fi
+
+          echo "Code review completed successfully"
+          echo "$OUTPUT"

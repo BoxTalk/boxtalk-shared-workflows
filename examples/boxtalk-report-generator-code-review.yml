@@ -1,0 +1,16 @@
+name: Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  code-review:
+    uses: <your-org>/boxtalk-shared-workflows/.github/workflows/cursor-code-review.yml@main
+    secrets:
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+    # Optional: Customize behavior
+    # with:
+    #   model_name: 'claude-sonnet-4-5-20250929'
+    #   min_lines_changed: 10
+    #   prompt_path: '.github/prompts/code-review-prompt.txt'
