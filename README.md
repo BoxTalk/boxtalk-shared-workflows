@@ -54,7 +54,7 @@ Replace `<your-org>` with your GitHub organization name in:
 `.github/workflows/code-review.yml`
 
 ```yaml
-uses: <your-org>/boxtalk-shared-workflows/.github/workflows/cursor-code-review.yml@main
+uses: BoxTalk/boxtalk-shared-workflows/.github/workflows/cursor-code-review.yml@main
 ```
 
 ### 4. Customize Prompts (Optional)
@@ -86,7 +86,7 @@ You can customize the workflow behavior by passing inputs:
 ```yaml
 jobs:
   code-review:
-    uses: <your-org>/boxtalk-shared-workflows/.github/workflows/cursor-code-review.yml@main
+    uses: BoxTalk/boxtalk-shared-workflows/.github/workflows/cursor-code-review.yml@main
     secrets:
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
     with:
