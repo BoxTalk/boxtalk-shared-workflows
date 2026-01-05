@@ -6,6 +6,9 @@ on:
 
 jobs:
   code-review:
+    permissions:
+      contents: read
+      pull-requests: write
     uses: BoxTalk/boxtalk-shared-workflows/.github/workflows/cursor-code-review.yml@main
     secrets:
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}

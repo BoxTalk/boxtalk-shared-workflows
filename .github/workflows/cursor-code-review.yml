@@ -12,7 +12,7 @@ on:
         description: 'Model name to use for code review'
         required: false
         type: string
-        default: 'claude-sonnet-4-5-20250929'
+        default: 'sonnet-4.5'
       min_lines_changed:
         description: 'Minimum lines changed to trigger review'
         required: false
@@ -26,9 +26,6 @@ on:
 jobs:
   code-review:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
     steps:
       - name: Check if review needed
         id: check_review

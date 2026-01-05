@@ -86,6 +86,9 @@ You can customize the workflow behavior by passing inputs:
 ```yaml
 jobs:
   code-review:
+    permissions:
+      contents: read
+      pull-requests: write
     uses: BoxTalk/boxtalk-shared-workflows/.github/workflows/cursor-code-review.yml@main
     secrets:
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
@@ -113,6 +116,17 @@ jobs:
 | Secret | Description | Required |
 |--------|-------------|----------|
 | `CURSOR_API_KEY` | Cursor API key for authentication | Yes |
+
+### Required Permissions
+
+The caller workflow must grant these permissions to the job:
+
+| Permission | Level | Purpose |
+|------------|-------|---------|
+| `contents` | `read` | Access repository code |
+| `pull-requests` | `write` | Post review comments on PRs |
+
+**Important:** These permissions must be set in the caller workflow (in each repository), not in the reusable workflow.
 
 ## How It Works
 
