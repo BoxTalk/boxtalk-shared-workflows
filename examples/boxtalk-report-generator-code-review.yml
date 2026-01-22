@@ -16,4 +16,4 @@ jobs:
     # with:
     #   model_name: 'claude-sonnet-4-5-20250929'
     #   min_lines_changed: 10
-    #   prompt_path: '.github/prompts/code-review-prompt.txt'
+    #   custom_prompt_path: '.github/prompts/custom-code-review-prompt.txt'

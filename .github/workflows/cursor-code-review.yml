@@ -3,11 +3,11 @@ name: Reusable Code Review
 on:
   workflow_call:
     inputs:
-      prompt_path:
-        description: 'Path to the code review prompt file'
+      custom_prompt_path:
+        description: 'Path to custom prompt file (will be appended to default prompt)'
         required: false
         type: string
-        default: '.github/prompts/code-review-prompt.txt'
+        default: '.github/prompts/custom-code-review-prompt.txt'
       model_name:
         description: 'Model name to use for code review'
         required: false
@@ -104,22 +104,8 @@ jobs:
             exit 1
           fi
 
-      - name: Check prompt file
-        if: steps.check_review.outputs.skip != 'true'
-        id: check_prompt
-        run: |
-          PROMPT_PATH="${{ inputs.prompt_path }}"
-          if [ ! -f "$PROMPT_PATH" ]; then
-            echo "⚠️ Warning: Prompt file not found at $PROMPT_PATH"
-            echo "Using default prompt from shared workflow repository"
-            echo "exists=false" >> $GITHUB_OUTPUT
-          else
-            echo "✅ Using custom prompt from $PROMPT_PATH"
-            echo "exists=true" >> $GITHUB_OUTPUT
-          fi
-
       - name: Checkout shared workflow for default prompt
-        if: steps.check_review.outputs.skip != 'true' && steps.check_prompt.outputs.exists == 'false'
+        if: steps.check_review.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/boxtalk-shared-workflows
@@ -127,12 +113,45 @@ jobs:
           sparse-checkout: |
             .github/prompts/code-review-prompt.txt
 
-      - name: Use default prompt if custom not found
-        if: steps.check_review.outputs.skip != 'true' && steps.check_prompt.outputs.exists == 'false'
+      - name: Check for custom prompt
+        if: steps.check_review.outputs.skip != 'true'
+        id: check_custom_prompt
+        run: |
+          CUSTOM_PROMPT_PATH="${{ inputs.custom_prompt_path }}"
+          if [ -f "$CUSTOM_PROMPT_PATH" ]; then
+            echo "✅ Custom prompt found at $CUSTOM_PROMPT_PATH"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️ No custom prompt at $CUSTOM_PROMPT_PATH (using default only)"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Combine prompts
+        if: steps.check_review.outputs.skip != 'true'
         run: |
           mkdir -p .github/prompts
-          cp .shared-workflows/.github/prompts/code-review-prompt.txt .github/prompts/code-review-prompt.txt
-          echo "✅ Default prompt copied successfully"
+
+          # Always start with the default prompt
+          cp .shared-workflows/.github/prompts/code-review-prompt.txt .github/prompts/combined-prompt.txt
+          echo "✅ Default prompt loaded"
+
+          # Append custom prompt if it exists
+          if [ "${{ steps.check_custom_prompt.outputs.exists }}" = "true" ]; then
+            echo "" >> .github/prompts/combined-prompt.txt
+            echo "# ========================================" >> .github/prompts/combined-prompt.txt
+            echo "# CUSTOM REPOSITORY-SPECIFIC INSTRUCTIONS" >> .github/prompts/combined-prompt.txt
+            echo "# ========================================" >> .github/prompts/combined-prompt.txt
+            echo "" >> .github/prompts/combined-prompt.txt
+            cat "${{ inputs.custom_prompt_path }}" >> .github/prompts/combined-prompt.txt
+            echo "✅ Custom prompt appended to default prompt"
+          else
+            echo "ℹ️ Using default prompt only"
+          fi
+
+          echo "📄 Final combined prompt:"
+          echo "---"
+          cat .github/prompts/combined-prompt.txt
+          echo "---"
 
       - name: Perform code review
         if: steps.check_review.outputs.skip != 'true'
@@ -143,18 +162,17 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PROMPT_PATH: ${{ inputs.prompt_path }}
           MODEL_NAME: ${{ inputs.model_name }}
         run: |
           set -eo pipefail
-          # Load and prepare the prompt using jq for safe substitution
+          # Load and prepare the combined prompt using jq for safe substitution
           PROMPT=$(jq -Rs \
             --arg repo "$REPO" \
             --arg pr_number "$PR_NUMBER" \
             --arg pr_head_sha "$PR_HEAD_SHA" \
             --arg pr_base_sha "$PR_BASE_SHA" \
             'gsub("\\{\\{REPO\\}\\}"; $repo) | gsub("\\{\\{PR_NUMBER\\}\\}"; $pr_number) | gsub("\\{\\{PR_HEAD_SHA\\}\\}"; $pr_head_sha) | gsub("\\{\\{PR_BASE_SHA\\}\\}"; $pr_base_sha)' \
-            "$PROMPT_PATH")
+            ".github/prompts/combined-prompt.txt")
 
           # Run cursor-agent with output capture and error handling
           echo "Starting code review with cursor-agent (model: $MODEL_NAME)..."

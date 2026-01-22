@@ -57,21 +57,38 @@ Replace `<your-org>` with your GitHub organization name in:
 uses: BoxTalk/boxtalk-shared-workflows/.github/workflows/cursor-code-review.yml@main
 ```
 
-### 4. Customize Prompts (Optional)
+### 4. Customize Prompts with Prompt Injection (Optional)
 
-Each repository can use a custom prompt by creating:
+The workflow uses a **two-layer prompt system**:
 
+1. **Default Prompt (Mandatory)**: Always loaded from `boxtalk-shared-workflows/.github/prompts/code-review-prompt.txt`
+   - Contains core review procedures, rules, and commenting guidelines
+   - Ensures consistent quality standards across all repositories
+
+2. **Custom Prompt (Optional)**: Injected on top of the default prompt
+   - Add repository-specific instructions
+   - Focus on domain-specific concerns
+   - Customize review priorities
+
+#### To add custom instructions:
+
+Create `.github/prompts/custom-code-review-prompt.txt` in your repository:
+
+```txt
+# Focus on these specific areas for this repository:
+
+Database Query Review:
+- Check for N+1 queries
+- Verify indexes are used
+- Ensure proper transaction handling
+
+API Contract:
+- Breaking changes must be flagged
+- Backwards compatibility is critical
+- Validate response formats match OpenAPI spec
 ```
-.github/prompts/code-review-prompt.txt
-```
 
-If this file exists, the workflow will use it. Otherwise, it falls back to the default prompt in the shared workflows repository.
-
-#### To customize a prompt:
-
-1. Copy the default prompt from `boxtalk-shared-workflows/.github/prompts/code-review-prompt.txt`
-2. Create `.github/prompts/code-review-prompt.txt` in your application repository
-3. Modify it according to your project's needs
+The workflow will automatically combine: **Default Prompt + Your Custom Prompt**
 
 ## Usage
 
@@ -99,16 +116,16 @@ jobs:
       # Change minimum lines threshold
       min_lines_changed: 20
 
-      # Use a custom prompt path
-      prompt_path: '.github/prompts/custom-review.txt'
+      # Add custom instructions on top of default prompt
+      custom_prompt_path: '.github/prompts/custom-review.txt'
 ```
 
 ### Available Inputs
 
 | Input | Description | Default | Required |
 |-------|-------------|---------|----------|
-| `prompt_path` | Path to the code review prompt file | `.github/prompts/code-review-prompt.txt` | No |
-| `model_name` | Model name to use for code review | `claude-sonnet-4-5-20250929` | No |
+| `custom_prompt_path` | Path to custom prompt file (injected on top of default) | `.github/prompts/custom-code-review-prompt.txt` | No |
+| `model_name` | Model name to use for code review | `sonnet-4.5` | No |
 | `min_lines_changed` | Minimum lines changed to trigger review | `10` | No |
 
 ### Required Secrets
@@ -148,46 +165,77 @@ The caller workflow must grant these permissions to the job:
 
 ## Prompt Customization Examples
 
-### Example 1: Stricter Security Focus
+These custom prompts are **added on top** of the default prompt. The default prompt contains all the core review procedures and rules, so you only need to add **additional** or **specialized** instructions.
 
-Create `.github/prompts/code-review-prompt.txt` in your repo:
+### Example 1: Security-Critical Service
 
-```
-You are operating in a GitHub Actions runner performing automated code review with STRICT SECURITY FOCUS.
-
-Context:
-  - Repo: {{REPO}}
-  - PR Number: {{PR_NUMBER}}
-
-Review Procedure:
-1. Get current diff: gh pr diff {{PR_NUMBER}}
-2. Focus EXCLUSIVELY on:
-   - SQL injection vulnerabilities
-   - Authentication/authorization bypasses
-   - Sensitive data exposure
-   - Dependency vulnerabilities
-
-Commenting Rules:
-- ONLY comment on security issues (🔒)
-- Max 3 comments per review
-- Must be actionable with specific fix recommendations
-```
-
-### Example 2: Backend-Specific Review
-
-For backend services, focus on API design, database queries, and error handling:
+Create `.github/prompts/custom-code-review-prompt.txt`:
 
 ```
-Context: Backend service review for {{REPO}}
+ADDITIONAL SECURITY REQUIREMENTS FOR THIS SERVICE:
 
-Focus Areas:
-1. API Design (RESTful conventions, status codes)
-2. Database Query Performance (N+1, missing indexes)
-3. Error Handling (logging, user-facing messages)
-4. Input Validation
-5. Transaction Management
+This service handles sensitive financial data. Pay EXTRA attention to:
 
-Ignore: Frontend concerns, styling, formatting
+1. Data Encryption:
+   - All PII must be encrypted at rest
+   - Verify proper use of encryption helpers
+
+2. Access Control:
+   - Every API endpoint must have proper authorization checks
+   - Flag any direct database access without permission validation
+
+3. Audit Logging:
+   - All data modifications must be logged
+   - Flag missing audit trail entries
+
+These requirements are IN ADDITION to the standard security checks.
+```
+
+### Example 2: Database-Heavy Backend Service
+
+For services with complex database operations:
+
+```
+DATABASE-SPECIFIC REVIEW FOCUS:
+
+This repository contains critical database operations. Add these checks:
+
+Priority Areas:
+1. N+1 Query Detection - flag any loops with database calls
+2. Transaction Boundaries - verify proper transaction handling
+3. Index Usage - check that queries use appropriate indexes
+4. Connection Pooling - ensure proper connection management
+
+Performance Thresholds:
+- Flag queries that scan more than 1000 rows without indexes
+- Flag missing pagination on list endpoints
+
+These checks supplement the standard review process.
+```
+
+### Example 3: Frontend Application
+
+For UI-heavy applications:
+
+```
+FRONTEND-SPECIFIC CONCERNS:
+
+Additional focus areas for this React application:
+
+1. Accessibility:
+   - Check for proper ARIA labels
+   - Verify keyboard navigation support
+   - Flag missing alt text on images
+
+2. Performance:
+   - Flag large bundle imports
+   - Check for unnecessary re-renders
+   - Verify proper use of useMemo/useCallback
+
+3. User Experience:
+   - Validate loading states
+   - Check error message clarity
+   - Verify responsive design considerations
 ```
 
 ## Maintenance
