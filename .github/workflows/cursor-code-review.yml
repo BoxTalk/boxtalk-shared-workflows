@@ -3,7 +3,7 @@ name: Reusable Code Review
 on:
   workflow_call:
     inputs:
-      custom_prompt_path:
+      prompt_path:
         description: 'Path to custom prompt file (will be appended to default prompt)'
         required: false
         type: string
@@ -117,7 +117,7 @@ jobs:
         if: steps.check_review.outputs.skip != 'true'
         id: check_custom_prompt
         run: |
-          CUSTOM_PROMPT_PATH="${{ inputs.custom_prompt_path }}"
+          CUSTOM_PROMPT_PATH="${{ inputs.prompt_path }}"
           if [ -f "$CUSTOM_PROMPT_PATH" ]; then
             echo "✅ Custom prompt found at $CUSTOM_PROMPT_PATH"
             echo "exists=true" >> $GITHUB_OUTPUT
@@ -142,7 +142,7 @@ jobs:
             echo "# CUSTOM REPOSITORY-SPECIFIC INSTRUCTIONS" >> .github/prompts/combined-prompt.txt
             echo "# ========================================" >> .github/prompts/combined-prompt.txt
             echo "" >> .github/prompts/combined-prompt.txt
-            cat "${{ inputs.custom_prompt_path }}" >> .github/prompts/combined-prompt.txt
+            cat "${{ inputs.prompt_path }}" >> .github/prompts/combined-prompt.txt
             echo "✅ Custom prompt appended to default prompt"
           else
             echo "ℹ️ Using default prompt only"
