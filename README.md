@@ -125,7 +125,7 @@ jobs:
 | Input | Description | Default | Required |
 |-------|-------------|---------|----------|
 | `custom_prompt_path` | Path to custom prompt file (injected on top of default) | `.github/prompts/custom-code-review-prompt.txt` | No |
-| `model_name` | Model name to use for code review | `sonnet-4.5` | No |
+| `model_name` | Model name to use for code review | `claude-4-sonnet` | No |
 | `min_lines_changed` | Minimum lines changed to trigger review | `10` | No |
 
 ### Required Secrets
