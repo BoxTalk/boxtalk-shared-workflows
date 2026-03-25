@@ -81,74 +81,18 @@ jobs:
           fetch-depth: 10
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Detect Cursor Agent version
-        if: steps.check_review.outputs.skip != 'true'
-        id: cursor_version
-        run: |
-          # Extract the version baked into the current install script
-          VERSION=$(curl -fsS https://cursor.com/install \
-            | grep -oP 'versions/\K[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[a-f0-9]+' \
-            | head -1)
-          if [ -z "$VERSION" ]; then
-            echo "::error::Could not detect Cursor Agent version from install script"
-            exit 1
-          fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Detected Cursor Agent version: ${VERSION}"
-
-      - name: Cache Cursor Agent
-        if: steps.check_review.outputs.skip != 'true'
-        id: cache_cursor
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/cursor-agent
-          key: cursor-agent-${{ steps.cursor_version.outputs.version }}-linux-x64
-
       - name: Install Cursor CLI
-        if: steps.check_review.outputs.skip != 'true' && steps.cache_cursor.outputs.cache-hit != 'true'
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        if: steps.check_review.outputs.skip != 'true'
         run: |
           set -e
-          VERSION="${{ steps.cursor_version.outputs.version }}"
-          DOWNLOAD_URL="https://downloads.cursor.com/lab/${VERSION}/linux/x64/agent-cli-package.tar.gz"
-          TEMP_DIR="$HOME/.local/share/cursor-agent/versions/.tmp-${VERSION}"
-          FINAL_DIR="$HOME/.local/share/cursor-agent/versions/${VERSION}"
-
-          mkdir -p "${TEMP_DIR}"
-
-          # Attempt download with API key auth (Cursor's download requires authentication)
-          echo "Downloading Cursor Agent ${VERSION}..."
-          if curl -fSL \
-            -H "Authorization: Bearer ${CURSOR_API_KEY}" \
-            "${DOWNLOAD_URL}" | tar --strip-components=1 -xzf - -C "${TEMP_DIR}"; then
-            echo "✓ Download succeeded with API key auth"
-          else
-            # Fallback: try without auth (in case Cursor makes it public again)
-            echo "Auth download failed, retrying without auth header..."
-            rm -rf "${TEMP_DIR}"
-            mkdir -p "${TEMP_DIR}"
-            if curl -fSL "${DOWNLOAD_URL}" | tar --strip-components=1 -xzf - -C "${TEMP_DIR}"; then
-              echo "✓ Download succeeded without auth"
-            else
-              echo "::error::Cursor Agent download returned 403. Ensure CURSOR_API_KEY secret is valid and has download permissions."
-              exit 1
-            fi
-          fi
-
-          mv "${TEMP_DIR}" "${FINAL_DIR}"
-
-      - name: Set up Cursor Agent symlinks
-        if: steps.check_review.outputs.skip != 'true'
-        run: |
-          VERSION="${{ steps.cursor_version.outputs.version }}"
-          FINAL_DIR="$HOME/.local/share/cursor-agent/versions/${VERSION}"
-
-          mkdir -p ~/.local/bin
-          ln -sf "${FINAL_DIR}/cursor-agent" ~/.local/bin/cursor-agent
-          ln -sf "${FINAL_DIR}/cursor-agent" ~/.local/bin/agent
+          curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-          echo "✓ cursor-agent symlink created"
+
+          # Verify installation
+          if [ ! -f "$HOME/.local/bin/cursor-agent" ]; then
+            echo "Error: Cursor CLI installation failed"
+            exit 1
+          fi
 
       - name: Validate API key
         if: steps.check_review.outputs.skip != 'true'
