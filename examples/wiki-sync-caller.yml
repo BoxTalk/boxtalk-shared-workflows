@@ -1,0 +1,47 @@
+# Example: .github/workflows/wiki-sync.yml in each repo
+#
+# Copy this file into the repo and change repo_dir + kb_name to match.
+# Required secrets (set at org level so all repos inherit them):
+#   ANTHROPIC_API_KEY  — Anthropic API key for gitnexus wiki generation
+#   KB_PAT             — GitHub PAT with write access to BoxTalk/boxtalk-kb
+#
+# ─── Standard repo (e.g. boxtalk-api, boxtalk-billing-backend) ───────────────
+
+name: Wiki Sync
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  wiki-sync:
+    permissions:
+      contents: read
+    uses: BoxTalk/boxtalk-shared-workflows/.github/workflows/wiki-sync.yml@main
+    with:
+      repo_dir: boxtalk-api   # ← change this: must match REPO_MAP key in sync-wiki.py
+      kb_name: boxtalk-api    # ← change this: folder name in boxtalk-kb/wiki/
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      KB_PAT: ${{ secrets.KB_PAT }}
+
+# ─── tenant_manager (also runs migration ingest + schema synthesis) ───────────
+#
+# name: Wiki Sync
+#
+# on:
+#   push:
+#     branches: [main]
+#
+# jobs:
+#   wiki-sync:
+#     permissions:
+#       contents: read
+#     uses: BoxTalk/boxtalk-shared-workflows/.github/workflows/wiki-sync.yml@main
+#     with:
+#       repo_dir: tenant_manager
+#       kb_name: tenant-manager
+#       run_migration_ingest: true      # ← enables Phase 1.5 migration ingestion
+#     secrets:
+#       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#       KB_PAT: ${{ secrets.KB_PAT }}

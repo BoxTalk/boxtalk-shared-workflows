@@ -1,0 +1,138 @@
+name: Wiki Sync (Reusable)
+
+# Called by individual repos on push to main.
+# Runs gitnexus analyze + wiki, then syncs pages into boxtalk-kb.
+#
+# Usage in a calling repo (.github/workflows/wiki-sync.yml):
+#
+#   on:
+#     push:
+#       branches: [main]
+#
+#   jobs:
+#     wiki-sync:
+#       uses: BoxTalk/boxtalk-shared-workflows/.github/workflows/wiki-sync.yml@main
+#       with:
+#         repo_dir: boxtalk-api        # directory name of this repo
+#         kb_name: boxtalk-api         # folder name in boxtalk-kb/wiki/
+#       secrets:
+#         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#         KB_PAT: ${{ secrets.KB_PAT }}
+
+on:
+  workflow_call:
+    inputs:
+      repo_dir:
+        description: 'Directory name of this repo (must match REPO_MAP key in sync-wiki.py)'
+        required: true
+        type: string
+      kb_name:
+        description: 'Folder name in boxtalk-kb/wiki/ for this repo'
+        required: true
+        type: string
+      run_migration_ingest:
+        description: 'Run ingest-migrations.py + synthesize-schema-wiki.py (tenant_manager only)'
+        required: false
+        type: boolean
+        default: false
+      node_version:
+        description: 'Node.js version for GitNexus'
+        required: false
+        type: string
+        default: '22'
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: 'Anthropic API key for gitnexus wiki generation via Claude CLI'
+        required: true
+      KB_PAT:
+        description: 'GitHub PAT with write access to BoxTalk/boxtalk-kb'
+        required: true
+
+jobs:
+  wiki-sync:
+    runs-on: ubuntu-latest
+
+    # Serialize all wiki-sync jobs so concurrent pushes don't conflict
+    # when committing to boxtalk-kb. Uses queue (cancel-in-progress: false)
+    # so every push eventually gets processed.
+    concurrency:
+      group: boxtalk-kb-write
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install GitNexus and Claude CLI
+        run: |
+          npm install -g gitnexus @anthropic-ai/claude-code
+          echo "GitNexus $(gitnexus --version)"
+          echo "Claude CLI $(claude --version)"
+
+      - name: Configure GitNexus → Claude CLI
+        run: |
+          mkdir -p ~/.gitnexus
+          # Use Claude CLI backend (reads ANTHROPIC_API_KEY from env)
+          echo '{"provider":"claude","model":""}' > ~/.gitnexus/config.json
+
+      - name: Index repository
+        run: gitnexus analyze
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Generate wiki
+        run: echo "n" | gitnexus wiki
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        timeout-minutes: 60
+
+      - name: Checkout boxtalk-kb
+        uses: actions/checkout@v4
+        with:
+          repository: BoxTalk/boxtalk-kb
+          token: ${{ secrets.KB_PAT }}
+          path: boxtalk-kb
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Sync wiki pages for this repo
+        run: |
+          cd boxtalk-kb
+          python3 scripts/sync-wiki.py --only ${{ inputs.repo_dir }}
+        env:
+          # Point the script at the checked-out repo root (not local ~/workspace path)
+          REPO_SRC_DIR: ${{ github.workspace }}
+
+      - name: Run migration ingest + schema synthesis
+        if: inputs.run_migration_ingest
+        run: |
+          cd boxtalk-kb
+          python3 scripts/ingest-migrations.py
+          python3 scripts/synthesize-schema-wiki.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Point ingest script at the tenant_manager checkout
+          BOXTALK_DIR: ${{ github.workspace }}/..
+
+      - name: Commit and push wiki changes
+        run: |
+          cd boxtalk-kb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No wiki changes to commit"
+          else
+            git commit -m "chore(wiki): sync ${{ inputs.repo_dir }} @ ${{ github.sha }}"
+            git push
+          fi
