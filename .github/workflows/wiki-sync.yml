@@ -16,7 +16,7 @@ name: Wiki Sync (Reusable)
 #         repo_dir: boxtalk-api        # directory name of this repo
 #         kb_name: boxtalk-api         # folder name in boxtalk-kb/wiki/
 #       secrets:
-#         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#         CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
 #         KB_PAT: ${{ secrets.KB_PAT }}
 
 on:
@@ -41,8 +41,8 @@ on:
         type: string
         default: '22'
     secrets:
-      ANTHROPIC_API_KEY:
-        description: 'Anthropic API key for gitnexus wiki generation via Claude CLI'
+      CURSOR_API_KEY:
+        description: 'Cursor API key — same one used by the PR review bot (already set at org level)'
         required: true
       KB_PAT:
         description: 'GitHub PAT with write access to BoxTalk/boxtalk-kb'
@@ -70,27 +70,28 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
 
-      - name: Install GitNexus and Claude CLI
+      - name: Install GitNexus and Cursor CLI
         run: |
-          npm install -g gitnexus @anthropic-ai/claude-code
+          npm install -g gitnexus
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "GitNexus $(gitnexus --version)"
-          echo "Claude CLI $(claude --version)"
 
-      - name: Configure GitNexus → Claude CLI
+      - name: Configure GitNexus → Cursor CLI
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           mkdir -p ~/.gitnexus
-          # Use Claude CLI backend (reads ANTHROPIC_API_KEY from env)
-          echo '{"provider":"claude","model":""}' > ~/.gitnexus/config.json
+          # Cursor CLI backend — same model used by the PR review bot
+          echo '{"provider":"cursor","model":"claude-4-sonnet"}' > ~/.gitnexus/config.json
 
       - name: Index repository
         run: gitnexus analyze
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Generate wiki
         run: echo "n" | gitnexus wiki
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         timeout-minutes: 60
 
       - name: Checkout boxtalk-kb
@@ -120,8 +121,7 @@ jobs:
           python3 scripts/ingest-migrations.py
           python3 scripts/synthesize-schema-wiki.py
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Point ingest script at the tenant_manager checkout
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           BOXTALK_DIR: ${{ github.workspace }}/..
 
       - name: Commit and push wiki changes
