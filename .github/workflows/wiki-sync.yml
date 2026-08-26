@@ -340,14 +340,14 @@ jobs:
   if: inputs.run_migration_ingest
   run: |
     set -e
-    
     cd boxtalk-kb
-    
     python3 scripts/ingest-migrations.py
     python3 scripts/synthesize-schema-wiki.py
   env:
     CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-    BOXTALK_DIR: ${{ github.workspace }}/..
+    # tenant_manager IS the checked-out repo — migrations live here directly
+    MIGRATIONS_DIR: ${{ github.workspace }}/migrations/schema
+    # GO_REPOS not needed in CI (cross-ref step skipped when MIGRATIONS_DIR set)
 
 # ============================================================
 # COMMIT + PUSH
