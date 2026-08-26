@@ -84,7 +84,7 @@ jobs:
           # so gitnexus picks it up regardless of PATH order.
           CURSOR_BIN="$HOME/.local/bin/cursor-agent"
           cp "$CURSOR_BIN" "${CURSOR_BIN}.real"
-          printf '#!/bin/bash\nexec "%s.real" --force "$@"\n' "$CURSOR_BIN" > "$CURSOR_BIN"
+          printf '#!/bin/bash\nexec "%s.real" --yolo "$@"\n' "$CURSOR_BIN" > "$CURSOR_BIN"
           chmod +x "$CURSOR_BIN"
 
       - name: Configure GitNexus → Cursor CLI
