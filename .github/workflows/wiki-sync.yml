@@ -77,19 +77,20 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "GitNexus $(gitnexus --version)"
 
-      - name: Wrap cursor-agent to bypass workspace trust in CI
+      - name: Trust workspace for Cursor CLI
         run: |
-          set -e
-          echo "PATH=$PATH"
-          echo "Locating cursor-agent..."
-          CURSOR_BIN=$(which cursor-agent)
-          echo "Found at: $CURSOR_BIN"
-          ls -la "$CURSOR_BIN"
-          cp "$CURSOR_BIN" "${CURSOR_BIN}.real"
-          printf '#!/bin/bash\nexec "%s.real" --yolo "$@"\n' "$CURSOR_BIN" > "$CURSOR_BIN"
-          chmod +x "$CURSOR_BIN"
-          echo "Wrapper installed. Contents:"
-          cat "$CURSOR_BIN"
+          # Disable workspace trust prompt via Cursor/VS Code settings file
+          for dir in \
+            "$HOME/.config/cursor/User" \
+            "$HOME/.config/Cursor/User" \
+            "$HOME/.vscode/User"; do
+            mkdir -p "$dir"
+            echo '{"security.workspace.trust.enabled": false}' > "$dir/settings.json"
+          done
+
+          # Also pre-trust via CLI flag (writes to trust store if supported)
+          cursor-agent --trust "$GITHUB_WORKSPACE" 2>/dev/null || true
+          cursor-agent -f --print "ping" 2>/dev/null || true
 
       - name: Configure GitNexus → Cursor CLI
         env:
