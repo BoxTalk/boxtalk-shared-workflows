@@ -77,6 +77,15 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "GitNexus $(gitnexus --version)"
 
+      - name: Wrap cursor-agent to bypass workspace trust in CI
+        run: |
+          # Cursor CLI prompts for workspace trust in non-interactive mode.
+          # This wrapper adds --force so gitnexus can call it headlessly.
+          CURSOR_BIN="$HOME/.local/bin/cursor-agent"
+          WRAPPER="/usr/local/bin/cursor-agent"
+          printf '#!/bin/bash\nexec "%s" --force "$@"\n' "$CURSOR_BIN" | sudo tee "$WRAPPER" > /dev/null
+          sudo chmod +x "$WRAPPER"
+
       - name: Configure GitNexus → Cursor CLI
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
