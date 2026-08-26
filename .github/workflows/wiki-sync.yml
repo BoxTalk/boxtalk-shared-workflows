@@ -79,13 +79,17 @@ jobs:
 
       - name: Wrap cursor-agent to bypass workspace trust in CI
         run: |
-          # Cursor CLI prompts for workspace trust in non-interactive mode.
-          # Replace the binary in-place with a wrapper that adds --force,
-          # so gitnexus picks it up regardless of PATH order.
-          CURSOR_BIN="$HOME/.local/bin/cursor-agent"
+          set -e
+          echo "PATH=$PATH"
+          echo "Locating cursor-agent..."
+          CURSOR_BIN=$(which cursor-agent)
+          echo "Found at: $CURSOR_BIN"
+          ls -la "$CURSOR_BIN"
           cp "$CURSOR_BIN" "${CURSOR_BIN}.real"
           printf '#!/bin/bash\nexec "%s.real" --yolo "$@"\n' "$CURSOR_BIN" > "$CURSOR_BIN"
           chmod +x "$CURSOR_BIN"
+          echo "Wrapper installed. Contents:"
+          cat "$CURSOR_BIN"
 
       - name: Configure GitNexus → Cursor CLI
         env:
