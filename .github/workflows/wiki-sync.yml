@@ -80,39 +80,37 @@ jobs:
         run: |
           set -e
 
-          REAL_AGENT="$(command -v agent || true)"
+          # Find the real cursor binary (agent symlink points to it)
+          REAL_AGENT="$(readlink -f "$(command -v agent || true)" 2>/dev/null || true)"
 
           if [ -z "$REAL_AGENT" ]; then
             echo "ERROR: Cursor 'agent' executable was not found."
             echo "PATH=$PATH"
-            echo "Contents of ~/.local/bin:"
             ls -la "$HOME/.local/bin" || true
             exit 1
           fi
 
-          echo "$REAL_AGENT"
+          echo "Real cursor binary: $REAL_AGENT"
 
           mkdir -p "$HOME/.cursor-bin"
 
-          cat > "$HOME/.cursor-bin/agent" <<EOF
+          # Wrap both 'agent' and 'cursor-agent' — gitnexus may call either
+          for name in agent cursor-agent; do
+            cat > "$HOME/.cursor-bin/$name" <<EOF
 #!/usr/bin/env bash
 exec "$REAL_AGENT" --trust "\$@"
 EOF
+            chmod +x "$HOME/.cursor-bin/$name"
+          done
 
-          chmod +x "$HOME/.cursor-bin/agent"
-
-          # Put wrapper before the real Cursor binary.
+          # Put wrapper dir before ~/.local/bin so both names resolve to wrapper
           echo "$HOME/.cursor-bin" >> "$GITHUB_PATH"
-
-          # Make it effective for the remainder of THIS step as well.
           export PATH="$HOME/.cursor-bin:$PATH"
 
-          echo ""
-          echo "Cursor Agent being used:"
-          command -v agent
+          echo "Wrapper contents:"
+          cat "$HOME/.cursor-bin/agent"
 
-          echo ""
-          echo "Cursor Agent version:"
+          echo "Version check (via wrapper):"
           agent --version
 
       - name: Configure GitNexus to use Cursor CLI
