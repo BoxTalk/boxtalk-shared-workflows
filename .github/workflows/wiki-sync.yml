@@ -79,20 +79,25 @@ jobs:
       - name: Wrap Cursor agent to bypass workspace trust
         run: |
           set -e
-          # Cursor CLI prompts for workspace trust in non-interactive mode.
-          # Find the real agent binary and replace it with a wrapper that
-          # passes --trust so gitnexus can call it headlessly.
+          echo "Cursor CLI binaries in ~/.local/bin:"
+          ls "$HOME/.local/bin/" | grep -E "agent|cursor" || echo "(none found)"
+
           REAL_AGENT="$HOME/.local/bin/agent"
           if [ ! -f "$REAL_AGENT" ]; then
             echo "ERROR: agent not found at $REAL_AGENT"
-            ls "$HOME/.local/bin/" || true
             exit 1
           fi
+
+          # Replace agent in-place with a wrapper that adds --trust
           cp "$REAL_AGENT" "${REAL_AGENT}.real"
           printf '#!/bin/bash\nexec "%s.real" --trust "$@"\n' "$REAL_AGENT" > "$REAL_AGENT"
           chmod +x "$REAL_AGENT"
-          echo "Wrapper installed at $REAL_AGENT"
-          cat "$REAL_AGENT"
+
+          # Also expose as cursor-agent — gitnexus provider check looks for this name
+          ln -sf "$REAL_AGENT" "$HOME/.local/bin/cursor-agent"
+
+          echo "Wrappers ready:"
+          ls -la "$HOME/.local/bin/agent" "$HOME/.local/bin/cursor-agent"
 
       - name: Configure GitNexus to use Cursor CLI
         env:
