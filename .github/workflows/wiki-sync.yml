@@ -76,28 +76,47 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "GitNexus $(gitnexus --version)"
 
-      - name: Wrap Cursor agent to bypass workspace trust
+      - name: Diagnose and wrap Cursor agent
         run: |
           set -e
-          echo "Cursor CLI binaries in ~/.local/bin:"
-          ls "$HOME/.local/bin/" | grep -E "agent|cursor" || echo "(none found)"
+          echo "=== ~/.local/bin contents ==="
+          ls -la "$HOME/.local/bin/" || echo "(empty)"
 
-          REAL_AGENT="$HOME/.local/bin/agent"
-          if [ ! -f "$REAL_AGENT" ]; then
-            echo "ERROR: agent not found at $REAL_AGENT"
+          echo "=== PATH ==="
+          echo "$PATH"
+
+          echo "=== Locating cursor binaries ==="
+          which agent       && echo "agent: $(which agent)"       || echo "agent: not in PATH"
+          which cursor-agent && echo "cursor-agent: $(which cursor-agent)" || echo "cursor-agent: not in PATH"
+          which cursor      && echo "cursor: $(which cursor)"      || echo "cursor: not in PATH"
+
+          # Find whichever cursor binary exists
+          REAL_AGENT=""
+          for name in agent cursor-agent cursor; do
+            bin="$(which $name 2>/dev/null || true)"
+            if [ -n "$bin" ] && [ -f "$bin" ]; then
+              REAL_AGENT="$bin"
+              echo "Using: $REAL_AGENT"
+              break
+            fi
+          done
+
+          if [ -z "$REAL_AGENT" ]; then
+            echo "ERROR: no cursor binary found"
             exit 1
           fi
 
-          # Replace agent in-place with a wrapper that adds --trust
+          echo "=== Binary info ==="
+          ls -la "$REAL_AGENT"
+          file "$REAL_AGENT" || true
+
+          # Replace in-place with a wrapper that adds --yolo (skip all safety prompts)
           cp "$REAL_AGENT" "${REAL_AGENT}.real"
-          printf '#!/bin/bash\nexec "%s.real" --trust "$@"\n' "$REAL_AGENT" > "$REAL_AGENT"
+          printf '#!/bin/bash\nexec "%s.real" --yolo "$@"\n' "$REAL_AGENT" > "$REAL_AGENT"
           chmod +x "$REAL_AGENT"
 
-          # Also expose as cursor-agent — gitnexus provider check looks for this name
-          ln -sf "$REAL_AGENT" "$HOME/.local/bin/cursor-agent"
-
-          echo "Wrappers ready:"
-          ls -la "$HOME/.local/bin/agent" "$HOME/.local/bin/cursor-agent"
+          echo "=== Wrapper installed ==="
+          cat "$REAL_AGENT"
 
       - name: Configure GitNexus to use Cursor CLI
         env:
