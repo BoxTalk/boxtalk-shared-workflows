@@ -1,7 +1,23 @@
-name: Wiki Sync (Reusable) - TRUST-FIX-v2
+name: Wiki Sync (Reusable)
 
 # Called by individual repos on push to main.
 # Runs gitnexus analyze + wiki, then syncs pages into boxtalk-kb.
+#
+# Usage in a calling repo (.github/workflows/wiki-sync.yml):
+#
+#   on:
+#     push:
+#       branches: [main]
+#
+#   jobs:
+#     wiki-sync:
+#       uses: BoxTalk/boxtalk-shared-workflows/.github/workflows/wiki-sync.yml@main
+#       with:
+#         repo_dir: boxtalk-api
+#         kb_name: boxtalk-api
+#       secrets:
+#         CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+#         KB_PAT: ${{ secrets.KB_PAT }}
 
 on:
   workflow_call:
@@ -10,29 +26,24 @@ on:
         description: 'Directory name of this repo (must match REPO_MAP key in sync-wiki.py)'
         required: true
         type: string
-
       kb_name:
         description: 'Folder name in boxtalk-kb/wiki/ for this repo'
         required: true
         type: string
-
       run_migration_ingest:
         description: 'Run ingest-migrations.py + synthesize-schema-wiki.py (tenant_manager only)'
         required: false
         type: boolean
         default: false
-
       node_version:
         description: 'Node.js version for GitNexus'
         required: false
         type: string
         default: '22'
-
     secrets:
       CURSOR_API_KEY:
-        description: 'Cursor API key — same one used by the PR review bot'
+        description: 'Cursor API key — same one used by the PR review bot (already set at org level)'
         required: true
-
       KB_PAT:
         description: 'GitHub PAT with write access to BoxTalk/boxtalk-kb'
         required: true
@@ -40,335 +51,106 @@ on:
 jobs:
   wiki-sync:
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
-
     concurrency:
       group: boxtalk-kb-write
       cancel-in-progress: false
 
     steps:
-
-      # ============================================================
-      # DEBUG / VERSION CHECK
-      # ============================================================
-
-      - name: Debug reusable workflow version - TRUST-FIX-v2
-        run: |
-          echo "=============================================="
-          echo "WIKI SYNC WORKFLOW VERSION: TRUST-FIX-v2"
-          echo "=============================================="
-          echo "Repository: ${{ github.repository }}"
-          echo "SHA: ${{ github.sha }}"
-          echo "Ref: ${{ github.ref }}"
-          echo "Workflow: ${{ github.workflow }}"
-          echo "=============================================="
-
-      # ============================================================
-      # CHECKOUT SOURCE REPOSITORY
-      # ============================================================
-
       - name: Checkout source repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # ============================================================
-      # NODE.JS
-      # ============================================================
-
-      - name: Setup Node.js - TRUST-FIX-v2
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
 
-      # ============================================================
-      # INSTALL GITNEXUS + CURSOR CLI
-      # ============================================================
-
-      - name: Install GitNexus and Cursor CLI - TRUST-FIX-v2
+      - name: Install GitNexus and Cursor CLI
         run: |
           set -e
-
-          echo "Installing GitNexus..."
           npm install -g gitnexus
-
-          echo "Installing Cursor Agent..."
           curl https://cursor.com/install -fsS | bash
-
-          # Cursor installer places `agent` in ~/.local/bin
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "GitNexus $(gitnexus --version)"
 
-          echo ""
-          echo "GitNexus version:"
-          gitnexus --version
-
-      # ============================================================
-      # DIAGNOSE CURSOR CLI
-      # ============================================================
-
-      - name: Diagnose Cursor CLI - TRUST-FIX-v2
+      - name: Wrap Cursor agent to bypass workspace trust
         run: |
           set -e
-
-          echo "=============================================="
-          echo "Cursor CLI diagnostics"
-          echo "=============================================="
-
-          echo ""
-          echo "PATH:"
-          echo "$PATH"
-
-          echo ""
-          echo "agent location:"
-          command -v agent
-
-          echo ""
-          echo "agent version:"
-          agent --version
-
-          echo ""
-          echo "agent binary:"
-          ls -l "$(command -v agent)"
-
-          echo ""
-          echo "cursor-agent location:"
-          command -v cursor-agent || true
-
-          echo ""
-          echo "cursor-agent version:"
-          cursor-agent --version || true
-
-          echo ""
-          echo "=============================================="
-
-      # ============================================================
-      # CONFIGURE CURSOR AGENT WORKSPACE TRUST
-      #
-      # GitNexus invokes the `agent` executable.
-      #
-      # We create a wrapper called `agent` earlier in PATH which
-      # forwards every invocation to the real Cursor Agent with
-      # --trust.
-      # ============================================================
-
-      - name: Configure Cursor Agent workspace trust - TRUST-FIX-v2
-        run: |
-          set -e
-
-          echo "=============================================="
-          echo "Configuring Cursor Agent workspace trust"
-          echo "=============================================="
-
-          # Find the REAL Cursor Agent before adding our wrapper.
-          REAL_AGENT="$(command -v agent)"
-
-          if [ -z "$REAL_AGENT" ]; then
-            echo "ERROR: Cursor Agent executable was not found."
+          # Cursor CLI prompts for workspace trust in non-interactive mode.
+          # Find the real agent binary and replace it with a wrapper that
+          # passes --trust so gitnexus can call it headlessly.
+          REAL_AGENT="$HOME/.local/bin/agent"
+          if [ ! -f "$REAL_AGENT" ]; then
+            echo "ERROR: agent not found at $REAL_AGENT"
+            ls "$HOME/.local/bin/" || true
             exit 1
           fi
+          cp "$REAL_AGENT" "${REAL_AGENT}.real"
+          printf '#!/bin/bash\nexec "%s.real" --trust "$@"\n' "$REAL_AGENT" > "$REAL_AGENT"
+          chmod +x "$REAL_AGENT"
+          echo "Wrapper installed at $REAL_AGENT"
+          cat "$REAL_AGENT"
 
-          echo "Real Cursor Agent:"
-          echo "$REAL_AGENT"
+      - name: Configure GitNexus to use Cursor CLI
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          mkdir -p "$HOME/.gitnexus"
+          printf '{"provider":"cursor","model":"claude-4-sonnet"}\n' > "$HOME/.gitnexus/config.json"
 
-          # Create directory for our wrapper.
-          mkdir -p "$HOME/.cursor-bin"
+      - name: Index repository
+        run: gitnexus analyze
 
-          # Create wrapper.
-          cat > "$HOME/.cursor-bin/agent" <<EOF
-#!/usr/bin/env bash
-  exec "$REAL_AGENT" --trust "\$@"
-  EOF
-  
-  chmod +x "$HOME/.cursor-bin/agent"
-  
-  # Put wrapper before the real Cursor Agent.
-  echo "$HOME/.cursor-bin" >> "$GITHUB_PATH"
-  
-  # Make it active immediately in this step.
-  export PATH="$HOME/.cursor-bin:$PATH"
-  
-  echo ""
-  echo "Wrapper created:"
-  cat "$HOME/.cursor-bin/agent"
-  
-  echo ""
-  echo "agent now resolves to:"
-  command -v agent
-  
-  echo ""
-  echo "agent version:"
-  agent --version
-  
-  echo ""
-  echo "=============================================="
-  echo "Cursor Agent workspace trust wrapper ready"
-  echo "=============================================="
+      - name: Generate wiki
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: gitnexus wiki
+        timeout-minutes: 60
 
-# ============================================================
-# VERIFY WRAPPER
-# ============================================================
+      - name: Checkout boxtalk-kb
+        uses: actions/checkout@v4
+        with:
+          repository: BoxTalk/boxtalk-kb
+          token: ${{ secrets.KB_PAT }}
+          path: boxtalk-kb
 
-- name: Verify Cursor Agent wrapper - TRUST-FIX-v2
-  run: |
-    set -e
-    
-    echo "=============================================="
-    echo "Verifying Cursor Agent wrapper"
-    echo "=============================================="
-    
-    echo ""
-    echo "agent:"
-    command -v agent
-    
-    echo ""
-    echo "agent version:"
-    agent --version
-    
-    echo ""
-    echo "Expected wrapper:"
-    echo "$HOME/.cursor-bin/agent"
-    
-    echo ""
-    echo "Actual resolved path:"
-    command -v agent
-    
-    echo ""
-    echo "Wrapper contents:"
-    cat "$HOME/.cursor-bin/agent"
-    
-    echo ""
-    echo "=============================================="
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-# ============================================================
-# CONFIGURE GITNEXUS
-# ============================================================
+      - name: Sync wiki pages for this repo
+        run: |
+          set -e
+          cd boxtalk-kb
+          python3 scripts/sync-wiki.py --only ${{ inputs.repo_dir }}
+        env:
+          REPO_SRC_DIR: ${{ github.workspace }}
 
-- name: Configure GitNexus → Cursor CLI - TRUST-FIX-v2
-  env:
-    CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-  run: |
-    set -e
-    
-    mkdir -p "$HOME/.gitnexus"
-    
-    cat > "$HOME/.gitnexus/config.json" <<'EOF'
-    {
-      "provider": "cursor",
-      "model": "claude-4-sonnet"
-    }
-    EOF
-    
-    echo "GitNexus configuration:"
-    cat "$HOME/.gitnexus/config.json"
+      - name: Run migration ingest + schema synthesis
+        if: inputs.run_migration_ingest
+        run: |
+          set -e
+          cd boxtalk-kb
+          python3 scripts/ingest-migrations.py
+          python3 scripts/synthesize-schema-wiki.py
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          MIGRATIONS_DIR: ${{ github.workspace }}/migrations/schema
 
-# ============================================================
-# INDEX REPOSITORY
-# ============================================================
-
-- name: Index repository - TRUST-FIX-v2
-  run: |
-    set -e
-    
-    gitnexus analyze
-
-# ============================================================
-# GENERATE WIKI
-# ============================================================
-
-- name: Generate wiki - TRUST-FIX-v2
-  env:
-    CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-  run: |
-    set -e
-    
-    echo "=============================================="
-    echo "Generating GitNexus wiki"
-    echo "=============================================="
-    
-    echo ""
-    echo "Cursor agent resolved to:"
-    command -v agent
-    
-    echo ""
-    echo "GitNexus wiki starting..."
-    
-    gitnexus wiki
-  timeout-minutes: 60
-
-# ============================================================
-# CHECKOUT KNOWLEDGE BASE
-# ============================================================
-
-- name: Checkout boxtalk-kb
-  uses: actions/checkout@v4
-  with:
-    repository: BoxTalk/boxtalk-kb
-    token: ${{ secrets.KB_PAT }}
-    path: boxtalk-kb
-
-# ============================================================
-# PYTHON
-# ============================================================
-
-- name: Setup Python
-  uses: actions/setup-python@v5
-  with:
-    python-version: '3.11'
-
-# ============================================================
-# SYNC WIKI PAGES
-# ============================================================
-
-- name: Sync wiki pages for this repo
-  run: |
-    set -e
-    
-    cd boxtalk-kb
-    
-    python3 scripts/sync-wiki.py \
-      --only "${{ inputs.repo_dir }}"
-  env:
-    REPO_SRC_DIR: ${{ github.workspace }}
-
-# ============================================================
-# OPTIONAL MIGRATION / SCHEMA PROCESSING
-# ============================================================
-
-- name: Run migration ingest + schema synthesis
-  if: inputs.run_migration_ingest
-  run: |
-    set -e
-    cd boxtalk-kb
-    python3 scripts/ingest-migrations.py
-    python3 scripts/synthesize-schema-wiki.py
-  env:
-    CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-    # tenant_manager IS the checked-out repo — migrations live here directly
-    MIGRATIONS_DIR: ${{ github.workspace }}/migrations/schema
-    # GO_REPOS not needed in CI (cross-ref step skipped when MIGRATIONS_DIR set)
-
-# ============================================================
-# COMMIT + PUSH
-# ============================================================
-
-- name: Commit and push wiki changes
-  run: |
-    set -e
-    
-    cd boxtalk-kb
-    
-    git config user.name "github-actions[bot]"
-    git config user.email "github-actions[bot]@users.noreply.github.com"
-    
-    git add -A
-    
-    if git diff --staged --quiet; then
-      echo "No wiki changes to commit"
-    else
-      git commit \
-        -m "chore(wiki): sync ${{ inputs.repo_dir }} @ ${{ github.sha }}"
-    
-      git push
-    fi
+      - name: Commit and push wiki changes
+        run: |
+          set -e
+          cd boxtalk-kb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No wiki changes to commit"
+          else
+            git commit -m "chore(wiki): sync ${{ inputs.repo_dir }} @ ${{ github.sha }}"
+            git push
+          fi
