@@ -122,6 +122,7 @@ jobs:
 
       - name: Increase ARG_MAX for large repos
         run: |
+          set -e
           echo "Current ARG_MAX: $(getconf ARG_MAX)"
           sudo sysctl -w kernel.arg_max=16777216
           echo "New ARG_MAX: $(getconf ARG_MAX)"
