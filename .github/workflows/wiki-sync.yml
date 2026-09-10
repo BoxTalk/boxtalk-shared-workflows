@@ -120,6 +120,12 @@ jobs:
       - name: Index repository
         run: gitnexus analyze
 
+      - name: Increase ARG_MAX for large repos
+        run: |
+          echo "Current ARG_MAX: $(getconf ARG_MAX)"
+          sudo sysctl -w kernel.arg_max=16777216
+          echo "New ARG_MAX: $(getconf ARG_MAX)"
+
       - name: Generate wiki
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
