@@ -120,17 +120,12 @@ jobs:
       - name: Index repository
         run: gitnexus analyze
 
-      - name: Increase ARG_MAX for large repos
-        run: |
-          set -e
-          echo "Current ARG_MAX: $(getconf ARG_MAX)"
-          sudo sysctl -w kernel.arg_max=16777216
-          echo "New ARG_MAX: $(getconf ARG_MAX)"
-
       - name: Generate wiki
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: gitnexus wiki
+        run: |
+          ulimit -s unlimited
+          gitnexus wiki
         timeout-minutes: 60
 
       - name: Checkout boxtalk-kb
