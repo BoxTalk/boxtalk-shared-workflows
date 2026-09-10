@@ -40,10 +40,28 @@ on:
         required: false
         type: string
         default: '22'
+      llm_provider:
+        description: >-
+          Wiki LLM provider: 'cursor' (default) or 'claude'.
+          Use 'claude' for repos that fail with `Error: spawn E2BIG` — see the
+          note at the bottom of this file. Requires ANTHROPIC_API_KEY.
+        required: false
+        type: string
+        default: 'cursor'
+      wiki_timeout_minutes:
+        description: >-
+          Timeout for the wiki generation step. Raise for repos with many
+          modules — box-talk-client generates 92 pages at ~2 pages/min.
+        required: false
+        type: number
+        default: 60
     secrets:
       CURSOR_API_KEY:
-        description: 'Cursor API key — same one used by the PR review bot (already set at org level)'
-        required: true
+        description: 'Cursor API key — same one used by the PR review bot (already set at org level). Required when llm_provider is cursor.'
+        required: false
+      ANTHROPIC_API_KEY:
+        description: 'Anthropic API key for the Claude Code CLI. Required when llm_provider is claude.'
+        required: false
       KB_PAT:
         description: 'GitHub PAT with write access to BoxTalk/boxtalk-kb'
         required: true
@@ -68,7 +86,29 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
 
+      - name: Validate provider configuration
+        env:
+          PROVIDER: ${{ inputs.llm_provider }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          case "$PROVIDER" in
+            cursor)
+              [ -n "$CURSOR_API_KEY" ] || { echo "::error::llm_provider=cursor requires the CURSOR_API_KEY secret"; exit 1; }
+              ;;
+            claude)
+              [ -n "$ANTHROPIC_API_KEY" ] || { echo "::error::llm_provider=claude requires the ANTHROPIC_API_KEY secret"; exit 1; }
+              ;;
+            *)
+              echo "::error::unsupported llm_provider '$PROVIDER' (expected 'cursor' or 'claude')"
+              exit 1
+              ;;
+          esac
+          echo "Wiki LLM provider: $PROVIDER"
+
       - name: Install GitNexus and Cursor CLI
+        if: inputs.llm_provider == 'cursor'
         run: |
           set -e
           npm install -g gitnexus
@@ -76,7 +116,16 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "GitNexus $(gitnexus --version)"
 
+      - name: Install GitNexus and Claude Code CLI
+        if: inputs.llm_provider == 'claude'
+        run: |
+          set -e
+          npm install -g gitnexus @anthropic-ai/claude-code
+          echo "GitNexus $(gitnexus --version)"
+          echo "Claude Code $(claude --version)"
+
       - name: Configure Cursor Agent workspace trust
+        if: inputs.llm_provider == 'cursor'
         run: |
           set -e
 
@@ -110,23 +159,32 @@ jobs:
           echo "Version check (via wrapper):"
           agent --version
 
-      - name: Configure GitNexus to use Cursor CLI
+      - name: Configure GitNexus provider
         env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          PROVIDER: ${{ inputs.llm_provider }}
         run: |
+          set -e
           mkdir -p "$HOME/.gitnexus"
-          printf '{"provider":"cursor","model":"claude-4-sonnet"}\n' > "$HOME/.gitnexus/config.json"
+          if [ "$PROVIDER" = "claude" ]; then
+            # No "model" key — GitNexus then omits --model and the Claude Code CLI
+            # picks its own default. This is the configuration verified against
+            # box-talk-client's 171KB grouping prompt.
+            printf '{"provider":"claude"}\n' > "$HOME/.gitnexus/config.json"
+          else
+            printf '{"provider":"cursor","model":"claude-4-sonnet"}\n' > "$HOME/.gitnexus/config.json"
+          fi
 
       - name: Index repository
         run: gitnexus analyze
 
+      # NOTE: the previous `ulimit -s unlimited` here was a no-op for this failure
+      # mode and has been removed. See the E2BIG note at the bottom of this file.
       - name: Generate wiki
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          ulimit -s unlimited
-          gitnexus wiki
-        timeout-minutes: 60
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: gitnexus wiki
+        timeout-minutes: ${{ inputs.wiki_timeout_minutes }}
 
       - name: Checkout boxtalk-kb
         uses: actions/checkout@v4
@@ -172,3 +230,45 @@ jobs:
             git commit -m "chore(wiki): sync ${{ inputs.repo_dir }} @ ${{ github.sha }}"
             git push
           fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Why llm_provider exists: `Error: spawn E2BIG` on large repos
+#
+# GitNexus's Cursor client passes the entire LLM prompt as a SINGLE argv element
+# (dist/core/wiki/cursor-client.js -> `args.push(fullPrompt)`). Linux caps one
+# argv string at MAX_ARG_STRLEN = 32 pages = 131,072 bytes. That is a
+# compile-time kernel constant: it is NOT affected by `ulimit -s`, `ulimit -a`,
+# or sysctl ARG_MAX. Earlier attempts to raise those limits could never work and
+# have been removed.
+#
+# GitNexus does batch oversized grouping prompts, but only above
+# GROUPING_TOKEN_BUDGET = 100,000 tokens (~400,000 bytes). That leaves a dead
+# zone where a prompt is too big for argv but too small to trigger batching:
+#
+#     < 131,072 B ............. fits in argv                      -> OK
+#     131,072 B – ~400,000 B .. too big for argv, no batching     -> E2BIG
+#     > ~400,000 B ............ batching splits it into small calls -> OK
+#
+# Measured grouping-prompt sizes (2026-09-10, gitnexus 1.6.11):
+#     boxtalk-billing-backend  479,172 B  -> batched, OK
+#     box-talk-client          171,277 B  -> DEAD ZONE, E2BIG
+#     finance-backend          164,497 B  -> DEAD ZONE, E2BIG
+#     all other 18 repos     1,909–85,926 B -> OK
+#
+# `cursor` is the only one of GitNexus's providers with this defect. The
+# claude/codex/opencode clients send the prompt on stdin
+# (dist/core/wiki/local-cli-client.js -> `child.stdin.end(stdinText)`), and the
+# openai/azure/openrouter/custom clients POST it as JSON. All are immune.
+#
+# Per-module prompts have the same exposure under cursor: source is truncated to
+# DEFAULT_MAX_TOKENS_PER_MODULE = 30,000 tokens = 120,000 chars, already 92% of
+# the cap before the call graph is appended. So a cursor repo that passes today
+# is one large module away from the same failure — prefer claude for any repo
+# whose grouping prompt is climbing toward 131,072 B.
+#
+# Shrinking the indexed set via .gitnexusignore was evaluated and rejected: for
+# box-talk-client the bulk is genuine source (src/ = 167 KB of the 171 KB), and
+# excluding all 234 test files saves only 16,548 B — still ~23 KB over the cap.
+#
+# Upstream has no issue or fix filed as of gitnexus 1.6.11.
+# ─────────────────────────────────────────────────────────────────────────────
