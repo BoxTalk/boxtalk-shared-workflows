@@ -96,10 +96,7 @@ jobs:
 
           # Wrap both 'agent' and 'cursor-agent' — gitnexus may call either
           for name in agent cursor-agent; do
-            cat > "$HOME/.cursor-bin/$name" <<EOF
-#!/usr/bin/env bash
-exec "$REAL_AGENT" --trust "\$@"
-EOF
+            printf '#!/usr/bin/env bash\nexec "%s" --trust "$@"\n' "$REAL_AGENT" > "$HOME/.cursor-bin/$name"
             chmod +x "$HOME/.cursor-bin/$name"
           done
 
