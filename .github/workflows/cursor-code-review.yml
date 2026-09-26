@@ -176,8 +176,23 @@ jobs:
 
           # Run cursor-agent with output capture and error handling
           echo "Starting code review with cursor-agent (model: $MODEL_NAME)..."
-          if ! OUTPUT=$(cursor-agent --force --model "$MODEL_NAME" --output-format=text --print "$PROMPT" 2>&1); then
-            echo "Error: cursor-agent failed with exit code $?"
+          # Capture the status directly off the command: inside `if ! cmd; then`
+          # the branch body sees $? from the negation (always 0), not from cursor-agent.
+          rc=0
+          OUTPUT=$(cursor-agent --force --model "$MODEL_NAME" --output-format=text --print "$PROMPT" 2>&1) || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "Error: cursor-agent failed with exit code $rc"
+            echo "Output: $OUTPUT"
+            exit 1
+          fi
+
+          # A zero exit is not proof of a review: cursor-agent surfaces plan and
+          # quota failures as an ActionRequiredError line, and if it ever pairs
+          # one with exit 0 the text below would be posted to the PR as a passing
+          # review. Anchored to line start on purpose — review prose legitimately
+          # discusses errors, so an unanchored match would fail every run.
+          if printf '%s\n' "$OUTPUT" | grep -qE '^[[:space:]]*ActionRequiredError:'; then
+            echo "Error: cursor-agent returned an ActionRequiredError despite exit code $rc"
             echo "Output: $OUTPUT"
             exit 1
           fi
