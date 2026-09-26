@@ -186,5 +186,16 @@ jobs:
             exit 1
           fi
 
+          # A zero exit is not proof of a review: cursor-agent surfaces plan and
+          # quota failures as an ActionRequiredError line, and if it ever pairs
+          # one with exit 0 the text below would be posted to the PR as a passing
+          # review. Anchored to line start on purpose — review prose legitimately
+          # discusses errors, so an unanchored match would fail every run.
+          if printf '%s\n' "$OUTPUT" | grep -qE '^[[:space:]]*ActionRequiredError:'; then
+            echo "Error: cursor-agent returned an ActionRequiredError despite exit code $rc"
+            echo "Output: $OUTPUT"
+            exit 1
+          fi
+
           echo "Code review completed successfully"
           echo "$OUTPUT"
